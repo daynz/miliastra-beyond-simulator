@@ -357,6 +357,56 @@ function applyPatchMutating(project, op) {
     project.selectedId = node.id
     return project
   }
+  if (type === 'rename') {
+    const node = findNode(project.root, op.id || project.selectedId)
+    if (!node) throw new Error('rename: node not found')
+    if (node.kind === 'server-container') throw new Error('rename: 客户端控件容器不能重命名')
+    const name = String(op.name ?? '').replace(/[\r\n\t]/g, ' ').trim()
+    if (!name) throw new Error('rename: 名称不能为空')
+    if (name.length > 64) throw new Error('rename: 名称过长（最多 64 个字符）')
+    node.name = name
+    project.selectedId = node.id
+    return project
+  }
+  if (type === 'moveTo') {
+    // 拖拽移动：既支持同父级排序，也支持换父级；都保持控件在画布上的视觉中心不变。
+    const node = findNode(project.root, op.id || project.selectedId)
+    const oldParent = node ? findParent(project.root, node.id) : null
+    if (!node || node.kind === 'server-container' || !oldParent) throw new Error('moveTo: node not found')
+    if (oldParent.kind === 'server-container' && project.meta.assetType !== 'client-control-template') {
+      throw new Error('moveTo: 服务端控件树的根节点不能移动')
+    }
+    const newParent = op.parentId ? findNode(project.root, op.parentId) : oldParent
+    if (!newParent) throw new Error('moveTo: parent not found')
+    if (newParent.id === node.id || isNodeInside(node, newParent.id)) throw new Error('控件不能移动到自身或其后代下面')
+    const sameParent = newParent.id === oldParent.id
+    const oldIndex = oldParent.children.findIndex((child) => child.id === node.id)
+    const maxIndex = newParent.children.length - (sameParent ? 1 : 0)
+    const requested = Number.isInteger(Number(op.index)) ? Math.trunc(Number(op.index)) : maxIndex
+    const index = Math.max(0, Math.min(requested, Math.max(0, maxIndex)))
+    if (sameParent && index === oldIndex) return project
+    if (project.meta.assetType === 'client-control-template'
+      && newParent.kind !== 'server-container' && oldParent.kind === 'server-container'
+      && (project.root.children || []).length <= 1) {
+      throw new Error('客户端控件模板列表至少保留一个顶层模板')
+    }
+    const before = layoutTree(project.root, project.canvasId)
+    const oldBox = before.boxes[node.id]
+    oldParent.children.splice(oldIndex, 1)
+    newParent.children.splice(index, 0, node)
+    if (oldBox) {
+      const after = layoutTree(project.root, project.canvasId)
+      const parentBox = newParent.kind === 'server-container'
+        ? canvasBox(project.canvasId)
+        : after.boxes[newParent.id] || canvasBox(project.canvasId)
+      const current = readCurrentTransform(node.transformByPlatform, project.canvasId)
+      writeTransform(project, node, applyInspectorToTransform(parentBox, current, {
+        posX: oldBox.centerX, posY: oldBox.centerY, width: oldBox.width, height: oldBox.height,
+      }))
+    }
+    project.selectedId = node.id
+    return project
+  }
   if (type === 'remove') {
     const id = op.id || project.selectedId
     const parent = findParent(project.root, id)

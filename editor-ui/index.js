@@ -57,6 +57,19 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
 @container(max-width:1180px){.qxsim-toolbar{grid-template-columns:minmax(130px,1fr) auto auto;column-gap:8px}.qxsim-action{padding:0 8px}.qxsim-main{grid-template-columns:200px minmax(300px,1fr) 292px}.qxsim-control{min-width:132px}.qxsim-control.ratio{width:128px}.qxsim-io .qxsim-control{width:96px}.qxsim-device-switch button{padding:0 7px}.qxsim-workspace{padding-left:12px;padding-right:12px}.qxsim-brand-text span{display:none}.qxsim-asset-switch button{font-size:11px}}
 @container(max-width:1000px){.qxsim-toolbar{height:90px;flex-basis:90px;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:42px 42px}.qxsim-toolbar-center{justify-self:end}.qxsim-actions{grid-column:1 / -1}.qxsim-editor-nav .save-summary{display:none}.qxsim-inspector{top:130px}}
 @container(max-width:820px){.qxsim-main{grid-template-columns:180px minmax(280px,1fr)}.qxsim-inspector{position:absolute;right:0;top:0;bottom:0;width:285px;z-index:5;box-shadow:-10px 0 24px var(--shadow)}.qxsim-script-page{grid-template-columns:190px minmax(320px,1fr)}.qxsim-script-editor{padding:12px}.qxsim-script-fields{grid-template-columns:1fr}}
+.qxsim-chevron-btn{width:16px;height:16px;margin-right:2px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--muted);font-size:9px;line-height:16px;flex:0 0 16px;display:inline-flex;align-items:center;justify-content:center}
+.qxsim-chevron-btn:hover{background:var(--hover);color:var(--text)}
+.qxsim-row[draggable=true]{cursor:grab}
+.qxsim-row.dragging{opacity:.45}
+.qxsim-row.drop-before{box-shadow:inset 0 2px 0 var(--blue)}
+.qxsim-row.drop-after{box-shadow:inset 0 -2px 0 var(--blue)}
+.qxsim-row.drop-inside{outline:2px dashed var(--blue);outline-offset:-2px;border-radius:6px}
+.qxsim-rename-input{flex:1;min-width:0;margin:0 2px 0 0;padding:1px 5px;border:1px solid var(--blue);border-radius:4px;background:var(--panel);color:var(--text);font:inherit}
+.qxsim-menu{position:fixed;z-index:60;min-width:164px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:0 12px 32px var(--shadow);display:flex;flex-direction:column;gap:2px}
+.qxsim-menu-item{padding:7px 10px;border:0;border-radius:5px;background:transparent;color:var(--text);font-size:12px;text-align:left}
+.qxsim-menu-item:hover{background:var(--hover)}
+.qxsim-menu-item.danger{color:var(--danger)}
+.qxsim-menu-tip{padding:6px 10px;color:var(--muted);font-size:11px;line-height:1.4}
 `
 
     const KIND_META = {
@@ -557,6 +570,14 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
       const [archives, setArchives] = React.useState([])
       const [page, setPage] = React.useState('ui'); const [inspectorTab, setInspectorTab] = React.useState('base')
       const [zoom, setZoom] = React.useState('fit'); const [hiddenCanvasIds, setHiddenCanvasIds] = React.useState({}); const [search, setSearch] = React.useState(''); const [addMode, setAddMode] = React.useState('template')
+      // 控件树交互：折叠、拖拽排序、右键菜单（重命名 / 删除节点）
+      const [collapsedIds, setCollapsedIds] = React.useState({})
+      const [draggingId, setDraggingId] = React.useState('')
+      const [dropTarget, setDropTarget] = React.useState(null)
+      const [rowMenu, setRowMenu] = React.useState(null)
+      const [menuDeleteConfirm, setMenuDeleteConfirm] = React.useState(false)
+      const [renamingId, setRenamingId] = React.useState(''); const renamingRef = React.useRef('')
+      const [renameDraft, setRenameDraft] = React.useState('')
       const [selectedScriptId, setSelectedScriptId] = React.useState('')
       const [scriptDraft, setScriptDraft] = React.useState(null)
       const [logicDraft, setLogicDraft] = React.useState({ version: 1, rules: [], dirty: false })
@@ -594,6 +615,77 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
       function patch(op, assetType = '') {
         const run = async () => { const current = snapRef.current; if (!current) throw new Error('editor is not ready'); try { if (assetType && current.asset?.type !== assetType) throw new Error(t('当前资产已切换，请重新选择控件后修改索引')); const next = await callApi(sessionId, 'patch', { op: { ...(typeof op === 'function' ? op(current) : op), expectedRevision: current.version } }); setError(''); return accept(next) } catch (reason) { setError(reason?.message || String(reason)); if (/revision conflict/.test(String(reason?.message || reason))) await reload(); throw reason } }
         queueRef.current = queueRef.current.then(run, run); return queueRef.current
+      }
+      // ── 控件树：折叠 / 拖拽排序 / 右键菜单 ──
+      React.useEffect(() => {
+        if (!rowMenu) return undefined
+        const close = () => { setRowMenu(null); setMenuDeleteConfirm(false) }
+        const onKey = (event) => { if (event.key === 'Escape') close() }
+        window.addEventListener('mousedown', close)
+        window.addEventListener('scroll', close, true)
+        window.addEventListener('keydown', onKey)
+        return () => {
+          window.removeEventListener('mousedown', close)
+          window.removeEventListener('scroll', close, true)
+          window.removeEventListener('keydown', onKey)
+        }
+      }, [rowMenu])
+      function rowById(id) {
+        return (snapRef.current?.tree || []).find((row) => row.id === id) || null
+      }
+      function toggleCollapsed(id) {
+        setCollapsedIds((prev) => ({ ...prev, [id]: !prev[id] }))
+      }
+      function openRowMenu(event, row) {
+        event.preventDefault(); event.stopPropagation()
+        const width = 168; const height = 112
+        const maxX = Math.max(8, (window.innerWidth || 1200) - width - 8)
+        const maxY = Math.max(8, (window.innerHeight || 800) - height - 8)
+        setRowMenu({ x: Math.min(event.clientX, maxX), y: Math.min(event.clientY, maxY), id: row.id })
+        setMenuDeleteConfirm(false)
+        void patch({ op: 'select', id: row.id }).catch(() => {})
+      }
+      function beginRename(id) {
+        const row = rowById(id)
+        setRowMenu(null); setMenuDeleteConfirm(false)
+        if (!row) return
+        setRenamingId(id); renamingRef.current = id; setRenameDraft(row.name)
+      }
+      function cancelRename() {
+        renamingRef.current = ''
+        setRenamingId(''); setRenameDraft('')
+      }
+      function commitRename(id, raw) {
+        if (renamingRef.current !== id) return
+        renamingRef.current = ''
+        const row = rowById(id)
+        const name = String(raw ?? renameDraft).replace(/[\r\n\t]/g, ' ').trim()
+        setRenamingId(''); setRenameDraft('')
+        if (!row || !name || name === row.name) return
+        void patch({ op: 'rename', id, name }).then(() => setNotice(t`已重命名为 ${name}`)).catch(() => {})
+      }
+      function confirmDeleteRow(id) {
+        const row = rowById(id)
+        setRowMenu(null); setMenuDeleteConfirm(false)
+        void patch({ op: 'remove', id }).then(() => setNotice(t`已删除 ${row?.name || ''}`.trim())).catch(() => {})
+      }
+      function handleRowDrop(row, position) {
+        const sourceId = draggingId
+        setDraggingId(''); setDropTarget(null)
+        if (!sourceId || sourceId === row.id) return
+        const source = rowById(sourceId)
+        if (!source) return
+        if ((row.ancestorIds || []).includes(sourceId)) {
+          setNotice(t('不能把控件移动到它自己的子节点里'))
+          return
+        }
+        const inside = position === 'inside'
+        const parentId = inside ? row.id : (row.parentId || snapRef.current?.root?.id || '')
+        let index = inside ? (row.childCount || 0) : row.siblingIndex + (position === 'after' ? 1 : 0)
+        if ((source.parentId || '') === (row.parentId || '') && source.siblingIndex < index) index -= 1
+        void patch({ op: 'moveTo', id: sourceId, parentId, index })
+          .then(() => setNotice(t`已移动「${source.name}」`))
+          .catch(() => {})
       }
       async function changeControlGuid(id, guid, assetType, automatic = false) {
         await saveScriptDraft()
@@ -831,7 +923,9 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
           return next
         })
       }
-      const filteredRows = snap.tree.filter((row) => !search.trim() || `${row.name} ${row.label} ${t(row.label)}`.toLowerCase().includes(search.trim().toLowerCase()))
+      const filteredRows = snap.tree.filter((row) => !search.trim() || `${row.name} ${row.label} ${t(row.label)}`.toLowerCase().includes(search.trim().toLowerCase()) || (row.ancestorIds || []).some((id) => (snap.tree.find((item) => item.id === id)?.name || '').toLowerCase().includes(search.trim().toLowerCase())))
+      // 折叠：隐藏被收起节点的全部后代（搜索时自动展开，避免搜不到）
+      const visibleRows = search.trim() ? filteredRows : filteredRows.filter((row) => !(row.ancestorIds || []).some((id) => collapsedIds[id]))
       const selectedRow = snap.tree.find((row) => row.id === snap.selectedId)
       const parentCandidates = clientTemplates && selectedRow
         ? snap.tree.filter((row) => row.id !== selectedRow.id && !(row.ancestorIds || []).includes(selectedRow.id))
@@ -878,18 +972,97 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
           e('button', { className: 'qxsim-action', onClick: () => setExportWarnings([]) }, t('关闭导出说明')),
           e('ul', null, exportWarnings.map((warning, index) => e('li', { key: index }, t(warning))))) : null,
         page === 'ui' ? e('div', { className: 'qxsim-main' },
-          e('aside', { className: 'qxsim-tree' },
+          e('aside', { className: 'qxsim-tree', onContextMenu: (event) => event.preventDefault() },
             e('div', { className: 'qxsim-asset-switch', 'aria-label': t('编辑资源类型') },
               e('button', { className: clientTemplates ? '' : 'active', title: t('编辑存档内的服务端 UI 控件'), onClick: () => void selectAsset('server-control-template') }, t('UI控件-服务端')),
               e('button', { className: clientTemplates ? 'active' : '', title: t('编辑存档内的客户端控件模板'), onClick: () => void selectAsset('client-control-template') }, t('UI控件-客户端'))),
             e('div', { className: 'qxsim-pane-head' }, e('div', { className: 'qxsim-pane-title' }, clientTemplates ? t('模板与子控件') : t('控件树')), e('span', { className: 'qxsim-muted' }, clientTemplates ? t`${snap.asset.templateCount} 个模板 · ${snap.tree.length} 个控件` : t`${snap.tree.length} 个节点`)),
             e('label', { className: 'qxsim-search' }, '⌕', e('input', { value: search, placeholder: clientTemplates ? t('搜索模板或控件') : t('搜索控件'), onChange: (event) => setSearch(event.target.value) }), search ? e('button', { onClick: () => setSearch('') }, '×') : e('span', null, '⌁')),
-            e('div', { className: 'qxsim-tree-scroll' }, filteredRows.length ? filteredRows.map((row) => {
+            e('div', { className: 'qxsim-tree-scroll' }, visibleRows.length ? visibleRows.map((row) => {
               const meta = KIND_META[row.kind] || ['◇', row.label]
               const canvasHidden = canvasHiddenIds.has(row.id)
               const selfHidden = Boolean(hiddenCanvasIds[row.id])
-              return e('div', { key: row.id, className: `qxsim-row${clientTemplates && row.depth === 0 ? ' template-root' : ''}${row.id === snap.selectedId ? ' active' : ''}${canvasHidden ? ' canvas-hidden' : ''}`, style: { paddingLeft: 8 + row.depth * 18, '--depth': row.depth }, title: `${t(meta[1])} · ${row.name} · GUID ${row.guid ?? row.id}`, onClick: () => void patch({ op: 'select', id: row.id }).catch(() => {}) }, e('span', { className: 'qxsim-chevron' }, row.childCount ? '▼' : ''), e('span', { className: 'qxsim-kind' }, meta[0]), e('span', { className: 'qxsim-row-label' }, row.name), e('span', { className: 'qxsim-row-end' }, clientTemplates && row.depth === 0 ? e(React.Fragment, null, e('span', { className: 'qxsim-template-tag' }, t('模板')), e('span', { className: 'qxsim-template-id' }, `#${row.guid ?? row.id}`)) : row.incomplete ? e('span', { className: 'qxsim-incomplete' }, t('暂不支持')) : null, e('button', { className: `qxsim-eye${selfHidden ? ' off' : ''}`, type: 'button', title: selfHidden ? t('在画布上显示（不影响控件初始可见性）') : t('在画布上隐藏（不影响控件初始可见性）'), 'aria-label': t`${row.name}画布可见性`, 'aria-pressed': !selfHidden, onClick: (event) => toggleCanvasVisible(event, row.id) }, selfHidden ? '◌' : '◉')))
-            }) : e('div', { className: 'qxsim-empty' }, t('没有匹配的控件'))),
+              const collapsed = Boolean(collapsedIds[row.id])
+              const isRenaming = renamingId === row.id
+              const canDrag = row.kind !== 'server-container'
+              const rowClass = `qxsim-row${clientTemplates && row.depth === 0 ? ' template-root' : ''}${row.id === snap.selectedId ? ' active' : ''}${canvasHidden ? ' canvas-hidden' : ''}${draggingId === row.id ? ' dragging' : ''}${dropTarget && dropTarget.id === row.id ? ` drop-${dropTarget.position}` : ''}`
+              return e('div', {
+                key: row.id,
+                className: rowClass,
+                draggable: canDrag,
+                style: { paddingLeft: 8 + row.depth * 18, '--depth': row.depth },
+                title: `${t(meta[1])} · ${row.name} · GUID ${row.guid ?? row.id}`,
+                onClick: () => void patch({ op: 'select', id: row.id }).catch(() => {}),
+                onContextMenu: (event) => openRowMenu(event, row),
+                onDragStart: (event) => {
+                  setDraggingId(row.id); setRowMenu(null)
+                  try { event.dataTransfer.setData('text/plain', row.id); event.dataTransfer.effectAllowed = 'move' } catch {}
+                },
+                onDragEnd: () => { setDraggingId(''); setDropTarget(null) },
+                onDragOver: (event) => {
+                  if (!draggingId || draggingId === row.id) return
+                  if ((row.ancestorIds || []).includes(draggingId)) return
+                  event.preventDefault()
+                  try { event.dataTransfer.dropEffect = 'move' } catch {}
+                  const rect = event.currentTarget.getBoundingClientRect()
+                  const ratio = (event.clientY - rect.top) / Math.max(1, rect.height)
+                  const position = row.kind === 'container' && ratio > 0.25 && ratio < 0.75
+                    ? 'inside'
+                    : (ratio < 0.5 ? 'before' : 'after')
+                  setDropTarget({ id: row.id, position })
+                },
+                onDragLeave: () => setDropTarget((prev) => (prev && prev.id === row.id ? null : prev)),
+                onDrop: (event) => {
+                  event.preventDefault()
+                  const rect = event.currentTarget.getBoundingClientRect()
+                  const ratio = (event.clientY - rect.top) / Math.max(1, rect.height)
+                  const position = row.kind === 'container' && ratio > 0.25 && ratio < 0.75
+                    ? 'inside'
+                    : (ratio < 0.5 ? 'before' : 'after')
+                  handleRowDrop(row, position)
+                },
+              },
+                row.childCount
+                  ? e('button', {
+                    className: 'qxsim-chevron-btn', type: 'button',
+                    title: collapsed ? t('展开子控件') : t('收起子控件'),
+                    'aria-label': t`${row.name}子控件展开状态`, 'aria-expanded': !collapsed,
+                    onClick: (event) => { event.stopPropagation(); toggleCollapsed(row.id) },
+                    onMouseDown: (event) => event.stopPropagation(),
+                  }, collapsed ? '▶' : '▼')
+                  : e('span', { className: 'qxsim-chevron' }, ''),
+                e('span', { className: 'qxsim-kind' }, meta[0]),
+                isRenaming
+                  ? e('input', {
+                    className: 'qxsim-rename-input',
+                    value: renameDraft,
+                    autoFocus: true,
+                    'aria-label': t('新名称'),
+                    onChange: (event) => setRenameDraft(event.target.value),
+                    onClick: (event) => event.stopPropagation(),
+                    onKeyDown: (event) => {
+                      if (event.key === 'Enter') { event.preventDefault(); commitRename(row.id, event.currentTarget.value) }
+                      else if (event.key === 'Escape') { event.preventDefault(); cancelRename() }
+                    },
+                    onBlur: (event) => commitRename(row.id, event.currentTarget.value),
+                  })
+                  : e('span', { className: 'qxsim-row-label' }, row.name),
+                e('span', { className: 'qxsim-row-end' }, clientTemplates && row.depth === 0 ? e(React.Fragment, null, e('span', { className: 'qxsim-template-tag' }, t('模板')), e('span', { className: 'qxsim-template-id' }, `#${row.guid ?? row.id}`)) : row.incomplete ? e('span', { className: 'qxsim-incomplete' }, t('暂不支持')) : null, e('button', { className: `qxsim-eye${selfHidden ? ' off' : ''}`, type: 'button', title: selfHidden ? t('在画布上显示（不影响控件初始可见性）') : t('在画布上隐藏（不影响控件初始可见性）'), 'aria-label': t`${row.name}画布可见性`, 'aria-pressed': !selfHidden, onClick: (event) => toggleCanvasVisible(event, row.id) }, selfHidden ? '◌' : '◉')))
+            }) : e('div', { className: 'qxsim-empty' }, search.trim() ? t('没有匹配的控件') : t('控件树为空'))),
+            rowMenu ? e('div', {
+              className: 'qxsim-menu',
+              style: { left: rowMenu.x, top: rowMenu.y },
+              onMouseDown: (event) => event.stopPropagation(),
+              onContextMenu: (event) => event.preventDefault(),
+            },
+              menuDeleteConfirm
+                ? e(React.Fragment, null,
+                  e('div', { className: 'qxsim-menu-tip' }, t('删除后不能撤销，确认删除这个节点？')),
+                  e('button', { className: 'qxsim-menu-item danger', onClick: () => confirmDeleteRow(rowMenu.id) }, t('删除节点')),
+                  e('button', { className: 'qxsim-menu-item', onClick: () => setMenuDeleteConfirm(false) }, t('取消')))
+                : e(React.Fragment, null,
+                  e('button', { className: 'qxsim-menu-item', onClick: () => beginRename(rowMenu.id) }, t('重命名')),
+                  e('button', { className: 'qxsim-menu-item danger', onClick: () => setMenuDeleteConfirm(true) }, t('删除节点')))) : null,
             e('div', { className: 'qxsim-tree-foot' },
               clientTemplates && selectedRow ? e('div', { className: 'qxsim-hierarchy' }, e('div', { className: 'qxsim-hierarchy-head' }, e('strong', null, t('层级与模板边界')), e('span', null, selectedRow.name)), e('div', { className: 'qxsim-parent-row' }, e('select', { 'aria-label': t('父级控件'), value: selectedParentId, onChange: (event) => void patch({ op: 'reparent', id: selectedRow.id, parentId: event.target.value }).then(() => setNotice(event.target.value === snap.root.id ? t('已提升为可实例化顶层模板') : t('已调整控件父级'))).catch(() => {}) }, e('option', { value: snap.root.id }, t('顶层模板（可实例化）')), parentCandidates.map((row) => e('option', { key: row.id, value: row.id }, `${'　'.repeat(row.depth)}${row.name}`))), e('button', { title: t('在同级中上移'), disabled: selectedRow.siblingIndex <= 0, onClick: () => void patch({ op: 'moveSibling', id: selectedRow.id, direction: 'up' }).catch(() => {}) }, '↑'), e('button', { title: t('在同级中下移'), disabled: selectedRow.siblingIndex >= selectedRow.siblingCount - 1, onClick: () => void patch({ op: 'moveSibling', id: selectedRow.id, direction: 'down' }).catch(() => {}) }, '↓')), e('div', { className: 'qxsim-hierarchy-note' }, selectedRow.depth === 0 ? t('该节点会写入独立 UIControlTemplate，可直接作为 prefabId。') : t`当前为第 ${selectedRow.depth} 层子控件，不会单独成为 prefabId。`)) : null,
               e('div', { className: 'qxsim-palette-head' }, e('span', { title: clientTemplates && addMode === 'template' ? t('新增独立可实例化模板') : t`添加到${selectedRow ? selectedRow.name : t('当前控件')}` }, clientTemplates && addMode === 'template' ? t('新增顶层模板') : t`添加到${selectedRow ? `“${selectedRow.name}”` : t('当前控件')}`), clientTemplates ? e('span', { className: 'qxsim-add-mode' }, e('button', { className: addMode === 'template' ? 'active' : '', onClick: () => setAddMode('template') }, t('顶层')), e('button', { className: addMode === 'child' ? 'active' : '', onClick: () => setAddMode('child') }, t('子控件'))) : null),
