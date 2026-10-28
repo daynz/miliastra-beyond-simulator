@@ -669,6 +669,23 @@ export class LuaRuntime {
     return control
   }
 
+  // 静态模板引用（编辑器里放下的 reference 节点）：加载期展开成子控件。
+  // 与动态 InstantiateClientUIControl 的区别：不抢占同级顺序、不改引用节点自身，
+  // 实例内脚本照常按模板 spec 挂载（每个实例各自一份）。
+  instantiateStatic(prefabIndex, parent) {
+    const spec = this.templates.get(Number(prefabIndex))
+    if (!spec || !parent) return null
+    const control = new Control(this, {
+      ...spec,
+      Id: this.nextControlId(),
+      prefabIndex: Number(prefabIndex),
+    })
+    parent.addChild(control)
+    walk(control, (child) => this.controlsById.set(child.Id, child))
+    this.mountSpecScripts(spec, control)
+    return control
+  }
+
   destroyControl(control) {
     if (!control || !control.alive) return
     if (control._destroying) {

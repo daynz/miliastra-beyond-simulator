@@ -328,6 +328,35 @@ function applyPatchMutating(project, op) {
     project.selectedId = child.id
     return project
   }
+  if (type === 'instantiateRef') {
+    // Unity 式「拖 Prefab 到场景」：在指定父级下放一个模板引用节点。
+    // 只记录引用索引；实例子树由运行时按模板展开，编辑器里只读展示。
+    const parent = findNode(project.root, op.parentId || project.selectedId)
+    if (!parent) throw new Error('instantiateRef: parent not found')
+    const prefabId = String(op.prefabId ?? '').trim()
+    if (!/^\d+$/.test(prefabId) || Number(prefabId) <= 0) throw new Error('instantiateRef: prefabId 必须是控件模板索引（正整数）')
+    const name = String(op.name || '').trim() || `模板实例${(parent.children || []).length + 1}`
+    const node = createNode('reference', {
+      id: nextUniqueId(project.root),
+      guid: nextUniqueGuid(project.root),
+      name,
+      referencedPrefabId: prefabId,
+    })
+    const width = Number(op.width) || 1280
+    const height = Number(op.height) || 720
+    const x = Number.isFinite(Number(op.x)) ? Number(op.x) : 0
+    const y = Number.isFinite(Number(op.y)) ? Number(op.y) : 0
+    for (const rt of Object.values(node.transformByPlatform)) {
+      rt.anchorMin = { x: 0.5, y: 0.5 }
+      rt.anchorMax = { x: 0.5, y: 0.5 }
+      rt.pivot = { x: 0.5, y: 0.5 }
+      rt.offset = { x, y }
+      rt.size = { x: width, y: height }
+    }
+    parent.children.push(node)
+    project.selectedId = node.id
+    return project
+  }
   if (type === 'reparent') {
     if (project.meta.assetType !== 'client-control-template') throw new Error('层级调整仅适用于客户端控件模板工程')
     const node = findNode(project.root, op.id || project.selectedId)

@@ -217,6 +217,30 @@ function bindCurrentView(session) {
   }
 }
 
+const specHasReference = (spec) => spec?.kind === 'reference'
+  || (spec?.children || []).some((child) => specHasReference(child))
+
+// 静态引用展开：把 reference 节点按已注册模板实例化成子控件。
+// 不做嵌套（模板内部若含 reference 直接跳过并记录），保持与「多个界面分开做」的约束一致。
+export function expandStaticReferences(runtime) {
+  const expanded = []
+  const skipped = []
+  const visit = (control) => {
+    for (const child of control.children.slice()) {
+      if (child.kind !== 'reference') { visit(child); continue }
+      const index = Number(child.referencedPrefabIndex)
+      const spec = Number.isSafeInteger(index) && index > 0 ? runtime.templates.get(index) : null
+      if (!spec) { skipped.push({ reference: child.name, prefabIndex: index || 0, reason: 'template-not-found' }); continue }
+      if (specHasReference(spec)) { skipped.push({ reference: child.name, prefabIndex: index, reason: 'nested-reference' }); continue }
+      const instance = runtime.instantiateStatic(index, child)
+      if (instance) expanded.push({ reference: child.name, prefabIndex: index, instance: instance.name })
+      else skipped.push({ reference: child.name, prefabIndex: index, reason: 'instantiate-failed' })
+    }
+  }
+  for (const root of runtime.roots) visit(root)
+  return { expanded, skipped }
+}
+
 export function startPlay(project, { templatesProject = null, scripts = [], sceneScripts = null, templateScripts = null, serverConfig = null, canvasId = '', playerCount = 1, viewPlayerIndex = 1, language = '' } = {}) {
   const sceneList = sceneScripts || scripts
   const templateList = templateScripts || scripts
@@ -229,7 +253,10 @@ export function startPlay(project, { templatesProject = null, scripts = [], scen
   const runtimes = []
   for (let i = 0; i < count; i += 1) runtimes.push(createPlayerRuntime(compiled, templateBundle, scripts, language))
   server.attachRuntimes(runtimes)
-  for (const rt of runtimes) rt.addRoot(compiled.root)
+  for (const rt of runtimes) {
+    rt.addRoot(compiled.root)
+    expandStaticReferences(rt)
+  }
   const session = {
     audioSessionId: randomUUID(),
     runtimes,
