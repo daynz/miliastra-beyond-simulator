@@ -63,7 +63,7 @@ npm install -g beyond-simulator-mcp
 包包含核心和 Worker，无需相邻源码。安装到 PATH 后，可把 `command` 设为 `beyond-simulator-mcp` 并仅传 `--workspace` 和工作区绝对路径。更新时再次执行 `npm install -g beyond-simulator-mcp` 并重启客户端。保存配置并重启客户端后，在工具列表中应看到：
 
 - `qxqy_project_open` / `qxqy_project_save`
-- `qxqy_studio_get` / `qxqy_studio_patch`
+- `qxqy_studio_get` / `qxqy_tree_search` / `qxqy_studio_patch`
 - `qxqy_studio_play`
 - `qxqy_studio_ui_screenshot` / `qxqy_studio_play_screenshot`
 - `qxqy_studio_load`
@@ -73,11 +73,15 @@ npm install -g beyond-simulator-mcp
 
 ```text
 qxqy_project_open({ path: "workspace/flappy-fish/flappy-fish.save.json" })
-qxqy_studio_get({ handle: "project-1" })
+qxqy_studio_get({ handle: "project-1", summary: "tree", depth: 2 })       // 只回控件树，省上下文
+qxqy_tree_search({ handle: "project-1", name: "Group", fields: ["id","name","box"] })
+qxqy_studio_get({ handle: "project-1", summary: "inspector" })            // 选中控件 + 它的盒子
 qxqy_studio_patch({ handle: "project-1", op: { ... , expectedRevision: N } })
 qxqy_project_save({ handle: "project-1", path: "workspace/flappy-fish/flappy-fish.save.json" })
 qxqy_preview_open({ path: "workspace/flappy-fish/flappy-fish.save.json" })
 ```
+
+`qxqy_studio_get` 默认仍返回无损完整快照（含 `root`、`boxes` 与脚本 `source`，大工程可达 MB 级）。用 `summary` 取裁剪视图：`tree`（可配 `depth`、`fields`）、`inspector`、`scripts`（不含 source，附 `sourceBytes`/`sourceLines`）、`none`。`qxqy_tree_search` 按名称/类型/父级/是否在画布内检索，默认 20 条、最多 200，`box` 字段为画布左下原点坐标。实测「千星方块」存档：全量 get ≈1.28 MB，`summary:"tree", depth:1` ≈1.2 KB。裁剪只做投影，不改数值语义，也不替代布局计算。
 
 `qxqy_project_open` 返回的 `handle` 是 MCP server 进程内的工程句柄；工程级读写和试玩工具必须带它，预览工具无需句柄。写操作必须使用最新的 `expectedRevision`。工程保存是显式操作，不会因为 `patch` 自动写盘。保存省略 `path` 时沿用最近成功打开或保存的路径；只有新工程默认使用 `qxqy-simulator.save.json`。传入新路径表示另存，此后省略路径会写回该新路径。
 

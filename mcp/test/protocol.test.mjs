@@ -152,7 +152,7 @@ test('MCP handshake exposes simulator tools and supports an edit/save round trip
     const names = listed.result.tools.map((tool) => tool.name)
     assert.deepEqual(names, [
       'qxqy_script_sync',
-      'qxqy_project_open', 'qxqy_project_save', 'qxqy_studio_get', 'qxqy_studio_patch',
+      'qxqy_project_open', 'qxqy_project_save', 'qxqy_studio_get', 'qxqy_tree_search', 'qxqy_studio_patch',
       'qxqy_studio_play', 'qxqy_studio_ui_screenshot', 'qxqy_studio_play_screenshot', 'qxqy_studio_load',
       'qxqy_preview_status', 'qxqy_preview_open',
     ])

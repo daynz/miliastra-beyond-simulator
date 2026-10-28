@@ -3,6 +3,7 @@
 import { SimulatorController } from './lib/controller.js'
 import { listWorkspaceArchives, resolveWorkspaceRoot } from './lib/workspace.js'
 import { createPreviewClient } from './lib/preview.js'
+import { searchTree, shapeSnapshot, TREE_FIELDS } from './lib/tree-query.js'
 import manifest from './package.json' with { type: 'json' }
 
 const SERVER_NAME = 'beyond-simulator-mcp'
@@ -75,8 +76,26 @@ const tools = [
   },
   {
     name: 'qxqy_studio_get',
-    description: '读取指定工程的无损 Authoring JSON 快照、当前 revision、脚本挂载、画布、服务端逻辑与 controlGuidChanges。若有索引变更记录，必须按控件身份同步存档 Lua source 和相关源文件中的索引引用，核对后再确认清除。写操作前应先获取最新 revision。',
-    inputSchema: objectSchema(handleProperty, ['handle']),
+    description: '读取指定工程快照与当前 revision。默认返回无损完整快照（含 root/boxes/脚本 source，体积大）；用 summary 取裁剪视图省上下文：summary="tree" 只回控件树（可用 depth 截断、fields 投影）、"inspector" 只回选中控件与它的盒子、"scripts" 只回脚本索引（不含 source，附 sourceBytes/sourceLines）、"none" 只回 revision/画布/资产。要求：写操作前先获取最新 revision；有 controlGuidChanges 时必须按控件身份同步存档 Lua source 与相关源文件，核对后再用 acknowledgeControlGuidChanges 确认清除。',
+    inputSchema: objectSchema({
+      ...handleProperty,
+      summary: { type: 'string', enum: ['full', 'tree', 'inspector', 'scripts', 'none'], description: '裁剪视图，省略或 full 时与旧行为一致。' },
+      depth: { type: 'integer', minimum: 0, description: 'summary=tree 时只回深度 ≤ depth 的行（0 = 顶层）。' },
+      fields: { type: 'array', items: { type: 'string', enum: TREE_FIELDS }, description: 'summary=tree 时的字段投影；可选 id/guid/name/kind/label/depth/parentId/childCount/siblingIndex/siblingCount/templateId/incomplete/box。' },
+    }, ['handle']),
+  },
+  {
+    name: 'qxqy_tree_search',
+    description: '在大存档里按名称子串（不区分大小写）、控件类型、父级或「是否在画布内」检索控件树，返回紧凑行（默认 20 条，最多 200）。比全量快照省上下文：先 tree_search 定位 id，再用 qxqy_studio_get summary="inspector" 看参数，最后 patch。box 字段含 left/bottom/width/height/centerX/centerY/visible（画布左下原点、Y 向上）。',
+    inputSchema: objectSchema({
+      ...handleProperty,
+      name: { type: 'string', description: '名称子串，不区分大小写。' },
+      kind: { type: 'string', description: '控件类型：container / textbox / image / button / cursor / reference / grid / textwindow / keyhint / animation / fullscreen。' },
+      parentId: { type: 'string', description: '只看该父级的直接子控件。' },
+      inViewport: { type: 'boolean', description: '只保留与当前画布相交的控件（部分露出也算）。' },
+      limit: { type: 'integer', minimum: 1, maximum: 200, description: '最多返回条数，默认 20。' },
+      fields: { type: 'array', items: { type: 'string', enum: TREE_FIELDS }, description: '返回字段，默认 id/name/kind/depth/parentId/childCount；需要坐标时加 box。' },
+    }, ['handle']),
   },
   {
     name: 'qxqy_studio_patch',
@@ -186,7 +205,8 @@ async function callTool(name, args = {}, signal) {
       ...controller.saveArchive(args.path),
       preview: { status: 'not-requested', message: 'Saved to disk. Call qxqy_preview_open with the returned path to switch or confirm the Web preview.' },
     }
-    if (name === 'qxqy_studio_get') return controller.get()
+    if (name === 'qxqy_studio_get') return shapeSnapshot(controller.get(), args)
+    if (name === 'qxqy_tree_search') return searchTree(controller.get(), args)
     if (name === 'qxqy_script_sync') return controller.scriptSyncAction(args.action, args.args || {})
     if (name === 'qxqy_studio_patch') return controller.patch(args.op)
     if (name === 'qxqy_studio_play') return controller.play(args.action, args.args || {}, signal)
