@@ -132,6 +132,7 @@ export function treeRows(root, guidById) {
       templateId,
       childCount: (node.children || []).length,
       incomplete: !CORE_KINDS.includes(node.kind),
+      ...(node.kind === 'reference' ? { referencedPrefabId: node.referencedPrefabId ?? null } : {}),
     })
     const children = node.children || []
     for (let index = 0; index < children.length; index += 1) {

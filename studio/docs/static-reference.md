@@ -16,9 +16,14 @@
 
 实现位置：`client/lua-runtime/src/runtime.js` 的 `instantiateStatic()`、`studio/play/session.js` 的 `expandStaticReferences()`、`studio/ui/project.js` 的 `instantiateRef` op。测试：`studio/test/static-reference.test.mjs`（展开 / 缺模板 / 禁止嵌套）。
 
-## 编辑器侧（未做，下一步）
+## 编辑器侧（已做）
 
-Unity 式操作：左侧树分「场景 / Prefab」两区、双击 Prefab 进入编辑 + 面包屑返回、把 Prefab 拖到画布生成实例、实例子树只读展开、右键「定位到 Prefab」。属性面板对实例只读并提示「在 Prefab 里改，或运行时用脚本改」。
+- 左侧新增「Prefab 模板」面板：列出模板（名称 / GUID / 子控件数），双击进入编辑，编辑态显示「← 返回场景」。
+- 把模板拖到画布：在落点生成引用实例（尺寸取模板根矩形），真实坐标按画布换算，不复制 CSS 像素。
+- 场景树里 reference 行带模板名标签，模板子控件作为**只读子行**展开（斜体 + “只读”），点击只读行会选中实例节点本身。
+- 右键：实例/只读行提供「定位到 Prefab」；只读行不提供重命名/删除。实例行仍可改名与移动（位置/尺寸照常可编辑）。
+- 属性面板对实例显示提示条：「实例子控件由 Prefab 决定、在场景里只读；要改外观/文字请进入 Prefab 修改，或用 Lua 按路径设置」；模板缺失时变黄提示。
+- 示例工程：`examples/prefab-screens.save.json`（ScreenReady / ScreenPause / ScreenResult 三个模板各放一个实例），试玩截图见 `studio/docs/prefab-screens.png`。
 
 ## 命名与多实例
 

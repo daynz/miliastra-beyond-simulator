@@ -70,6 +70,25 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
 .qxsim-menu-item:hover{background:var(--hover)}
 .qxsim-menu-item.danger{color:var(--danger)}
 .qxsim-menu-tip{padding:6px 10px;color:var(--muted);font-size:11px;line-height:1.4}
+.qxsim-prefab-panel{flex:0 0 auto;margin:0 8px 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);overflow:hidden}
+.qxsim-prefab-head{display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--lineSoft);font-size:11px;color:var(--muted)}
+.qxsim-prefab-head strong{color:var(--text);font-size:12px;font-weight:600}
+.qxsim-prefab-head .spacer{flex:1}
+.qxsim-prefab-back{padding:2px 6px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--text);font-size:11px}
+.qxsim-prefab-list{max-height:132px;overflow:auto;padding:4px}
+.qxsim-prefab-item{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;font-size:12px;cursor:grab;user-select:none}
+.qxsim-prefab-item:hover{background:var(--hover)}
+.qxsim-prefab-item.active{background:var(--hover);box-shadow:inset 2px 0 0 var(--blue)}
+.qxsim-prefab-item .kind{color:var(--muted);font-size:11px}
+.qxsim-prefab-item .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qxsim-prefab-item .count{color:var(--muted);font-size:10px}
+.qxsim-prefab-item.nested{opacity:.55}
+.qxsim-row.readonly{opacity:.72;font-style:italic}
+.qxsim-row.readonly .qxsim-row-label::after{content:' ·只读';font-size:10px;color:var(--muted);font-style:normal}
+.qxsim-row .qxsim-prefab-tag{flex:0 0 auto;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font-size:10px}
+.qxsim-prefab-note{margin:0 0 8px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--muted);font-size:11px;line-height:1.5}
+.qxsim-prefab-note b{color:var(--text);font-weight:600}
+.qxsim-prefab-note.warn{border-color:#c9843a55;color:#d9a45b}
 `
 
     const KIND_META = {
@@ -578,6 +597,7 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
       const [menuDeleteConfirm, setMenuDeleteConfirm] = React.useState(false)
       const [renamingId, setRenamingId] = React.useState(''); const renamingRef = React.useRef('')
       const [renameDraft, setRenameDraft] = React.useState('')
+      const [draggingPrefab, setDraggingPrefab] = React.useState('')
       const [selectedScriptId, setSelectedScriptId] = React.useState('')
       const [scriptDraft, setScriptDraft] = React.useState(null)
       const [logicDraft, setLogicDraft] = React.useState({ version: 1, rules: [], dirty: false })
@@ -668,6 +688,40 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
         const row = rowById(id)
         setRowMenu(null); setMenuDeleteConfirm(false)
         void patch({ op: 'remove', id }).then(() => setNotice(t`已删除 ${row?.name || ''}`.trim())).catch(() => {})
+      }
+      function enterPrefab(id) {
+        if (!id) return
+        void patch({ op: 'openTemplate', id }).then(() => setNotice(t('正在编辑 Prefab；子控件改动会写回所有实例'))).catch(() => {})
+      }
+      function backToScene() {
+        const previous = snapRef.current?.selectedId || ''
+        void patch({ op: 'selectAsset', assetType: 'server-control-template' })
+          .then((next) => { if (previous && (next?.tree || []).some((row) => row.id === previous)) return patch({ op: 'select', id: previous }) })
+          .catch(() => {})
+      }
+      function dropPrefabOnStage(event) {
+        const prefabId = draggingPrefab
+        setDraggingPrefab('')
+        const prefab = (snapRef.current?.prefabs || []).find((item) => item.guid === prefabId)
+        if (!prefab) return
+        const current = snapRef.current
+        if (current?.asset?.type === 'client-control-template') {
+          setNotice(t('请先返回场景，再把 Prefab 拖进画布'))
+          return
+        }
+        const rect = event.currentTarget.getBoundingClientRect()
+        const canvas = current.canvas
+        const x = (event.clientX - rect.left) * canvas.width / rect.width - canvas.width / 2
+        const y = canvas.height / 2 - (event.clientY - rect.top) * canvas.height / rect.height
+        void patch({
+          op: 'instantiateRef',
+          parentId: current.root?.id || '',
+          prefabId,
+          name: prefab.name,
+          x, y,
+          width: prefab.width,
+          height: prefab.height,
+        }).then(() => setNotice(t`已放置实例「${prefab.name}」；双击 Prefab 可进入编辑`)).catch(() => {})
       }
       function handleRowDrop(row, position) {
         const sourceId = draggingId
@@ -977,6 +1031,23 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
               e('button', { className: clientTemplates ? '' : 'active', title: t('编辑存档内的服务端 UI 控件'), onClick: () => void selectAsset('server-control-template') }, t('UI控件-服务端')),
               e('button', { className: clientTemplates ? 'active' : '', title: t('编辑存档内的客户端控件模板'), onClick: () => void selectAsset('client-control-template') }, t('UI控件-客户端'))),
             e('div', { className: 'qxsim-pane-head' }, e('div', { className: 'qxsim-pane-title' }, clientTemplates ? t('模板与子控件') : t('控件树')), e('span', { className: 'qxsim-muted' }, clientTemplates ? t`${snap.asset.templateCount} 个模板 · ${snap.tree.length} 个控件` : t`${snap.tree.length} 个节点`)),
+            e('div', { className: 'qxsim-prefab-panel' },
+              e('div', { className: 'qxsim-prefab-head' }, e('strong', null, t('Prefab 模板')), e('span', { className: 'spacer' }), e('span', null, t`${(snap.prefabs || []).length} 个`),
+                clientTemplates ? e('button', { className: 'qxsim-prefab-back', onClick: backToScene, title: t('回到场景树') }, t('← 返回场景')) : null),
+              e('div', { className: 'qxsim-prefab-list' }, (snap.prefabs || []).length
+                ? snap.prefabs.map((prefab) => e('div', {
+                  key: prefab.id,
+                  className: `qxsim-prefab-item${clientTemplates && prefab.id === snap.selectedId ? ' active' : ''}${prefab.nested ? ' nested' : ''}`,
+                  draggable: true,
+                  title: prefab.nested
+                    ? t('该模板内部含模板引用（暂不支持嵌套 Prefab）')
+                    : t`双击进入编辑；拖到画布放置实例 · GUID ${prefab.guid}`,
+                  onDoubleClick: () => enterPrefab(prefab.id),
+                  onDragStart: (event) => { setDraggingPrefab(prefab.guid); try { event.dataTransfer.setData('text/plain', prefab.guid); event.dataTransfer.effectAllowed = 'copy' } catch {} },
+                  onDragEnd: () => setDraggingPrefab(''),
+                }, e('span', { className: 'kind' }, '▤'), e('span', { className: 'name' }, prefab.name), e('span', { className: 'count' }, t`${prefab.childCount} 控件`)))
+                : e('div', { className: 'qxsim-empty', style: { padding: '8px' } }, t('还没有 Prefab：到客户端模板里新建一个'))),
+            ),
             e('label', { className: 'qxsim-search' }, '⌕', e('input', { value: search, placeholder: clientTemplates ? t('搜索模板或控件') : t('搜索控件'), onChange: (event) => setSearch(event.target.value) }), search ? e('button', { onClick: () => setSearch('') }, '×') : e('span', null, '⌁')),
             e('div', { className: 'qxsim-tree-scroll' }, visibleRows.length ? visibleRows.map((row) => {
               const meta = KIND_META[row.kind] || ['◇', row.label]
@@ -984,15 +1055,16 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
               const selfHidden = Boolean(hiddenCanvasIds[row.id])
               const collapsed = Boolean(collapsedIds[row.id])
               const isRenaming = renamingId === row.id
-              const canDrag = row.kind !== 'server-container'
+              const readonly = row.readonly === true
+              const canDrag = !readonly && row.kind !== 'server-container'
               const rowClass = `qxsim-row${clientTemplates && row.depth === 0 ? ' template-root' : ''}${row.id === snap.selectedId ? ' active' : ''}${canvasHidden ? ' canvas-hidden' : ''}${draggingId === row.id ? ' dragging' : ''}${dropTarget && dropTarget.id === row.id ? ` drop-${dropTarget.position}` : ''}`
               return e('div', {
                 key: row.id,
-                className: rowClass,
+                className: `${rowClass}${readonly ? ' readonly' : ''}`,
                 draggable: canDrag,
                 style: { paddingLeft: 8 + row.depth * 18, '--depth': row.depth },
                 title: `${t(meta[1])} · ${row.name} · GUID ${row.guid ?? row.id}`,
-                onClick: () => void patch({ op: 'select', id: row.id }).catch(() => {}),
+                onClick: () => void patch({ op: 'select', id: readonly ? row.instanceOf : row.id }).catch(() => {}),
                 onContextMenu: (event) => openRowMenu(event, row),
                 onDragStart: (event) => {
                   setDraggingId(row.id); setRowMenu(null)
@@ -1032,6 +1104,7 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
                   }, collapsed ? '▶' : '▼')
                   : e('span', { className: 'qxsim-chevron' }, ''),
                 e('span', { className: 'qxsim-kind' }, meta[0]),
+                !readonly && row.prefab ? e('span', { className: 'qxsim-prefab-tag', title: t('实例来自这个 Prefab') }, row.prefab.missing ? t('模板缺失') : row.prefab.name) : null,
                 isRenaming
                   ? e('input', {
                     className: 'qxsim-rename-input',
@@ -1060,18 +1133,29 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
                   e('div', { className: 'qxsim-menu-tip' }, t('删除后不能撤销，确认删除这个节点？')),
                   e('button', { className: 'qxsim-menu-item danger', onClick: () => confirmDeleteRow(rowMenu.id) }, t('删除节点')),
                   e('button', { className: 'qxsim-menu-item', onClick: () => setMenuDeleteConfirm(false) }, t('取消')))
-                : e(React.Fragment, null,
-                  e('button', { className: 'qxsim-menu-item', onClick: () => beginRename(rowMenu.id) }, t('重命名')),
-                  e('button', { className: 'qxsim-menu-item danger', onClick: () => setMenuDeleteConfirm(true) }, t('删除节点')))) : null,
+                : (() => {
+                  const row = rowMenu ? rowById(rowMenu.id) : null
+                  const isReadonly = row?.readonly === true
+                  const prefabId = row?.prefab?.id || (row?.readonly ? row.prefabId : '')
+                  return e(React.Fragment, null,
+                    prefabId ? e('button', { className: 'qxsim-menu-item', onClick: () => { setRowMenu(null); enterPrefab(prefabId) } }, t('定位到 Prefab')) : null,
+                    isReadonly ? null : e('button', { className: 'qxsim-menu-item', onClick: () => beginRename(rowMenu.id) }, t('重命名')),
+                    isReadonly ? null : e('button', { className: 'qxsim-menu-item danger', onClick: () => setMenuDeleteConfirm(true) }, t('删除节点')))
+                })()) : null,
             e('div', { className: 'qxsim-tree-foot' },
               clientTemplates && selectedRow ? e('div', { className: 'qxsim-hierarchy' }, e('div', { className: 'qxsim-hierarchy-head' }, e('strong', null, t('层级与模板边界')), e('span', null, selectedRow.name)), e('div', { className: 'qxsim-parent-row' }, e('select', { 'aria-label': t('父级控件'), value: selectedParentId, onChange: (event) => void patch({ op: 'reparent', id: selectedRow.id, parentId: event.target.value }).then(() => setNotice(event.target.value === snap.root.id ? t('已提升为可实例化顶层模板') : t('已调整控件父级'))).catch(() => {}) }, e('option', { value: snap.root.id }, t('顶层模板（可实例化）')), parentCandidates.map((row) => e('option', { key: row.id, value: row.id }, `${'　'.repeat(row.depth)}${row.name}`))), e('button', { title: t('在同级中上移'), disabled: selectedRow.siblingIndex <= 0, onClick: () => void patch({ op: 'moveSibling', id: selectedRow.id, direction: 'up' }).catch(() => {}) }, '↑'), e('button', { title: t('在同级中下移'), disabled: selectedRow.siblingIndex >= selectedRow.siblingCount - 1, onClick: () => void patch({ op: 'moveSibling', id: selectedRow.id, direction: 'down' }).catch(() => {}) }, '↓')), e('div', { className: 'qxsim-hierarchy-note' }, selectedRow.depth === 0 ? t('该节点会写入独立 UIControlTemplate，可直接作为 prefabId。') : t`当前为第 ${selectedRow.depth} 层子控件，不会单独成为 prefabId。`)) : null,
               e('div', { className: 'qxsim-palette-head' }, e('span', { title: clientTemplates && addMode === 'template' ? t('新增独立可实例化模板') : t`添加到${selectedRow ? selectedRow.name : t('当前控件')}` }, clientTemplates && addMode === 'template' ? t('新增顶层模板') : t`添加到${selectedRow ? `“${selectedRow.name}”` : t('当前控件')}`), clientTemplates ? e('span', { className: 'qxsim-add-mode' }, e('button', { className: addMode === 'template' ? 'active' : '', onClick: () => setAddMode('template') }, t('顶层')), e('button', { className: addMode === 'child' ? 'active' : '', onClick: () => setAddMode('child') }, t('子控件'))) : null),
               e('div', { className: 'qxsim-add' }, CONTROL_TYPES.filter(([kind]) => clientTemplates || kind !== 'container').map(([kind, label]) => e('button', { key: kind, title: `${clientTemplates && addMode === 'template' ? t('新增') : t('添加')}${t(label)}`, onClick: () => addControl(kind, t(label)) }, `＋ ${t(label)}`))))),
-          e('main', { className: 'qxsim-center' }, e('div', { className: 'qxsim-workspace', ref: workspaceRef }, e('div', { className: 'qxsim-stage-shell', style: { width: `${Math.max(40, Math.round(canvasWidth * effectiveZoom))}px` } }, e('div', { className: 'qxsim-stage-label' }, e('b', null, clientTemplates ? t('Lua 模板预览') : t('界面控件组')), e('span', { className: 'qxsim-platform-tag' }, snap.canvas.platform), e('span', null, t`${activeRatio} · ${canvasWidth}×${canvasHeight} · 左下原点`)), e('div', { className: 'qxsim-stage', style: { width: '100%', aspectRatio: `${canvasWidth} / ${canvasHeight}` }, onClick: (event) => { const rect = event.currentTarget.getBoundingClientRect(); void patch({ op: 'pick', x: (event.clientX - rect.left) * canvasWidth / rect.width, y: (rect.bottom - event.clientY) * canvasHeight / rect.height }).catch(() => {}) } },
+          e('main', { className: 'qxsim-center' }, e('div', { className: 'qxsim-workspace', ref: workspaceRef }, e('div', { className: 'qxsim-stage-shell', style: { width: `${Math.max(40, Math.round(canvasWidth * effectiveZoom))}px` } }, e('div', { className: 'qxsim-stage-label' }, e('b', null, clientTemplates ? t('Lua 模板预览') : t('界面控件组')), e('span', { className: 'qxsim-platform-tag' }, snap.canvas.platform), e('span', null, t`${activeRatio} · ${canvasWidth}×${canvasHeight} · 左下原点`)), e('div', { className: 'qxsim-stage', style: { width: '100%', aspectRatio: `${canvasWidth} / ${canvasHeight}` }, onClick: (event) => { const rect = event.currentTarget.getBoundingClientRect(); void patch({ op: 'pick', x: (event.clientX - rect.left) * canvasWidth / rect.width, y: (rect.bottom - event.clientY) * canvasHeight / rect.height }).catch(() => {}) },
+                    onDragOver: (event) => { if (draggingPrefab) { event.preventDefault(); try { event.dataTransfer.dropEffect = 'copy' } catch {} } },
+                    onDrop: (event) => { if (!draggingPrefab) return; event.preventDefault(); dropPrefabOnStage(event) } },
             e(MaskedControls, { boxes: renderBoxes, canvasWidth, canvasHeight, renderControl: item => renderControl(item, snap, canvasWidth, canvasHeight, effectiveZoom, fontFamily) }),
             selectionBox ? renderControl(selectionBox, snap, canvasWidth, canvasHeight, effectiveZoom, fontFamily, true) : null))), error ? e('div', { className: 'qxsim-status error' }, '⚠ ', t(error)) : e('div', { className: 'qxsim-status' }, e('span', null, t`● ${t(snap.asset?.label) || t('控件')}编辑`), e('span', null, notice || (selectedRow ? t`当前：${selectedRow.name}` : '')), e('span', { className: 'spacer' }), e('span', null, clientTemplates ? t('GIA 导出后可在 Lua 中按 prefabId 实例化') : t('字段在失焦或 Enter 时提交')))),
           e('aside', { className: 'qxsim-inspector' }, snap.inspector ? e(React.Fragment, null,
-            e('div', { className: 'qxsim-inspector-head' }, e('div', { className: 'qxsim-inspector-line' }, e('span', { className: 'qxsim-kind' }, (KIND_META[snap.inspector.kind] || ['◇'])[0]), e('strong', null, t(snap.inspector.label)), clientTemplates && selectedRow?.depth === 0 ? e('span', { className: 'qxsim-template-tag' }, t('可实例化')) : null), e('div', { className: 'qxsim-node-id' }, clientTemplates && selectedRow?.depth === 0 ? t('模板索引 ') : t('控件 GUID '), e('code', null, snap.inspector.guid ?? snap.inspector.id), ' · ', selectedRow?.name || t('节点')), snap.inspector.kind !== 'server-container' ? e(ControlGuidEditor, { key: `${snap.asset.type}:${snap.inspector.id}`, inspector: snap.inspector, autofill: snap.clientGuidAutofill, onSave: (id, guid, automatic) => changeControlGuid(id, guid, snap.asset.type, automatic) }) : null),
+            e('div', { className: 'qxsim-inspector-head' }, e('div', { className: 'qxsim-inspector-line' }, e('span', { className: 'qxsim-kind' }, (KIND_META[snap.inspector.kind] || ['◇'])[0]), e('strong', null, t(snap.inspector.label)), clientTemplates && selectedRow?.depth === 0 ? e('span', { className: 'qxsim-template-tag' }, t('可实例化')) : null), e('div', { className: 'qxsim-node-id' }, clientTemplates && selectedRow?.depth === 0 ? t('模板索引 ') : t('控件 GUID '), e('code', null, snap.inspector.guid ?? snap.inspector.id), ' · ', selectedRow?.name || t('节点')), snap.inspector.prefabNote ? e('div', { className: `qxsim-prefab-note${snap.inspector.prefab?.missing ? ' warn' : ''}` },
+              e('b', null, snap.inspector.prefab?.missing ? t('模板缺失') : t('Prefab 实例')),
+              snap.inspector.prefab?.missing ? '' : ' · ' + String(snap.inspector.prefab?.name || ''),
+              e('div', { style: { marginTop: '4px' } }, t(snap.inspector.prefabNote))) : null, snap.inspector.kind !== 'server-container' ? e(ControlGuidEditor, { key: `${snap.asset.type}:${snap.inspector.id}`, inspector: snap.inspector, autofill: snap.clientGuidAutofill, onSave: (id, guid, automatic) => changeControlGuid(id, guid, snap.asset.type, automatic) }) : null),
             e('div', { className: 'qxsim-tabs', style: canInspectorScript ? undefined : { gridTemplateColumns: '1fr' } },
               e('button', { className: inspectorTab === 'base' ? 'active' : '', onClick: () => setInspectorTab('base') }, t('基础属性')),
               canInspectorScript ? e('button', { className: inspectorTab === 'script' ? 'active' : '', onClick: () => setInspectorTab('script') }, t('脚本')) : null),

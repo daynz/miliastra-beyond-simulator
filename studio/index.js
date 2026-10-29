@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { normalizeScriptSync } from './script-sync-config.js'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { applyPatch, createProject, snapshotProject } from './ui/project.js'
+import { containsReference, describePrefabs, findTemplate, withPrefabInstances } from './ui/prefabs.js'
 import { assertSaveVersion } from './ui/migrate-layout.js'
 import { createDefaultClientTemplateProject, createDefaultProject, findNode, walk } from './ui/authoring.js'
 import {
@@ -479,6 +480,18 @@ export function createStudio(seed, options = {}) {
         selectedOffset: ordered.findIndex(({ node }) => node.id === snap.selectedId),
       }
     }
+    const prefabs = describePrefabs(projects.client, project.canvasId)
+    snap.prefabs = prefabs
+    if (activeAssetType === SERVER_ASSET) {
+      snap.tree = withPrefabInstances(snap.tree, projects.client)
+      const selectedRow = snap.tree.find((row) => row.id === snap.selectedId)
+      if (selectedRow?.kind === 'reference' && snap.inspector) {
+        snap.inspector.prefab = selectedRow.prefab
+        snap.inspector.prefabNote = selectedRow.prefab?.missing
+          ? '引用的控件模板不存在：检查 prefabId 是否与模板根控件 GUID 一致'
+          : '实例子控件由 Prefab 决定、在场景里只读；要改外观/文字请进入 Prefab 修改，或用 Lua 按路径设置'
+      }
+    }
     snap.scriptSync = toJson(scriptSync)
     assertNoUndefined(snap)
     return snap
@@ -633,6 +646,31 @@ export function createStudio(seed, options = {}) {
     }
     if (op.op === 'addScript' || op.op === 'updateScript' || op.op === 'removeScript') {
       return applyScriptOp(op)
+    }
+    if (op.op === 'openTemplate') {
+      const project = currentProject()
+      if (op.expectedRevision !== undefined && Number(op.expectedRevision) !== project.version) {
+        throw new Error(`revision conflict: expected ${op.expectedRevision}, current ${project.version}`)
+      }
+      const id = String(op.id || '').trim()
+      const node = findNode(projects.client.root, id)
+      if (!node) throw new Error('openTemplate: 找不到该模板')
+      projects.client.selectedId = node.id
+      activeAssetType = CLIENT_ASSET
+      return get()
+    }
+    if (op.op === 'instantiateRef') {
+      const server = projects.server
+      if (op.expectedRevision !== undefined && Number(op.expectedRevision) !== server.version) {
+        throw new Error(`revision conflict: expected ${op.expectedRevision}, current ${server.version}`)
+      }
+      const prefabId = String(op.prefabId ?? '').trim()
+      const template = findTemplate(projects.client, prefabId)
+      if (!template) throw new Error('instantiateRef: 找不到该控件模板（prefabId 需为模板根控件 GUID）')
+      if (containsReference(template)) throw new Error('instantiateRef: 该模板内部含模板引用，暂不支持嵌套 Prefab')
+      applyPatch(server, { ...op, expectedRevision: undefined })
+      activeAssetType = SERVER_ASSET
+      return get()
     }
     if (op.op === 'selectAsset') {
       activeAssetType = op.assetType === CLIENT_ASSET ? CLIENT_ASSET : SERVER_ASSET
