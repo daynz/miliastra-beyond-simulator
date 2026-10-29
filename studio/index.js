@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { applyPatch, createProject, snapshotProject } from './ui/project.js'
 import { containsReference, describePrefabs, findTemplate, withPrefabInstances } from './ui/prefabs.js'
 import { assertSaveVersion } from './ui/migrate-layout.js'
-import { createDefaultClientTemplateProject, createDefaultProject, findNode, walk } from './ui/authoring.js'
+import { createDefaultClientTemplateProject, createDefaultProject, findNode, findParent, walk } from './ui/authoring.js'
 import {
   startPlay,
   stepPlay,
@@ -722,6 +722,33 @@ export function createStudio(seed, options = {}) {
     return result
   }
 
+  // 单个界面模板导出：把一个模板放进只含它自己的客户端工程里导出 GIA，
+  // 便于真机逐个导入（多模板一次导入的兼容性尚未验证）。
+  function exportClientTemplateGia(templateId) {
+    const node = findNode(projects.client.root, templateId)
+    if (!node) throw new Error('导出界面模板：找不到该模板')
+    const parent = findParent(projects.client.root, node.id)
+    if (parent && parent.kind !== 'server-container') throw new Error('导出界面模板：只能导出顶层模板')
+    const clone = JSON.parse(JSON.stringify(projects.client))
+    clone.root.children = (clone.root.children || []).filter((child) => child.id === templateId)
+    const ids = new Set()
+    walk(node, (child) => ids.add(child.id))
+    const scopedScripts = scripts
+      .filter((script) => script.controlAsset === CLIENT_ASSET && ids.has(script.controlId))
+      .map((script) => ({ id: script.id, guid: script.guid, path: script.path, source: script.source, controlId: script.controlId, controlAsset: script.controlAsset }))
+    const out = exportGia(clone, { scripts: scopedScripts })
+    const safe = String(node.name || 'template').replace(/[\\/:*?"<>|]/g, '-')
+    return toJson({
+      filename: `${safe}.gia`,
+      mimeType: 'application/octet-stream',
+      encoding: 'base64',
+      data: out.buffer.toString('base64'),
+      warnings: [...new Set(out.warnings || [])],
+      templateId: node.id,
+      templateGuid: String(node.guid ?? ''),
+    })
+  }
+
   function exportDataRaw(format = 'json', requestedAssetType = '') {
     const normalized = String(format).toLowerCase()
     if (normalized === 'save' || normalized === 'archive') {
@@ -733,6 +760,17 @@ export function createStudio(seed, options = {}) {
         data: data.toString('base64'),
         warnings: [],
       })
+    }
+    if (normalized === 'templates-gia') {
+      const templates = [...(projects.client.root.children || [])]
+      if (!templates.length) throw new Error('没有可导出的界面模板')
+      const files = templates.map((node) => exportClientTemplateGia(node.id))
+      return toJson({ files, warnings: [...new Set(files.flatMap((file) => file.warnings || []))] })
+    }
+    if (normalized === 'template-gia') {
+      const templateId = String(requestedAssetType || '').trim()
+      if (!templateId) throw new Error('template-gia 需要模板 id')
+      return exportClientTemplateGia(templateId)
     }
     if (normalized === 'save-gia' || normalized === 'archive-gia') {
       // 官方编辑器中三类资产本就是独立 GIA 文件（UIControlGroup / UIControlTemplate 列表 / script.gia），

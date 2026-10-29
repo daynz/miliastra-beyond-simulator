@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudio } from '../index.js'
+import { inspectGia } from '../gia/codec.js'
 
 function studioWithPrefab() {
   const studio = createStudio()
@@ -82,4 +83,20 @@ test('新建 Prefab：createPrefab 切换客户端资产、选中新模板并带
   assert.match(created.name, /新建界面/)
   assert.ok(Number(created.guid) > 0, '模板根必须有 GUID 才能作为 prefabId')
   assert.equal(next.prefabs.length, before.prefabs.length + 1)
+})
+
+
+test('导出：界面模板逐个一个 GIA，整合包保持多模板', () => {
+  const { studio } = studioWithPrefab()
+  const prefabs = studio.get().prefabs
+  const all = studio.exportData('templates-gia')
+  assert.equal(all.files.length, prefabs.length)
+  const counts = all.files.map((file) => inspectGia(Buffer.from(file.data, 'base64')).templateCount)
+  assert.deepEqual(counts, prefabs.map(() => 1), '每个文件只应包含一个模板')
+  assert.ok(all.files.some((file) => file.filename === 'ScreenReady.gia'), all.files.map((file) => file.filename).join(', '))
+  const single = studio.exportData('template-gia', prefabs.find((item) => item.name === 'ScreenReady').id)
+  assert.equal(single.filename, 'ScreenReady.gia')
+  assert.equal(inspectGia(Buffer.from(single.data, 'base64')).templateCount, 1)
+  const combined = studio.exportData('gia-combined')
+  assert.equal(inspectGia(Buffer.from(combined.data, 'base64')).templateCount, prefabs.length)
 })
