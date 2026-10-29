@@ -689,6 +689,11 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
         setRowMenu(null); setMenuDeleteConfirm(false)
         void patch({ op: 'remove', id }).then(() => setNotice(t`已删除 ${row?.name || ''}`.trim())).catch(() => {})
       }
+      function createPrefab() {
+        void patch({ op: 'createPrefab' })
+          .then(() => setNotice(t('已新建 Prefab：可先重命名，再往里面加控件；返回场景后可拖到画布')))
+          .catch(() => {})
+      }
       function enterPrefab(id) {
         if (!id) return
         void patch({ op: 'openTemplate', id }).then(() => setNotice(t('正在编辑 Prefab；子控件改动会写回所有实例'))).catch(() => {})
@@ -1032,7 +1037,7 @@ export function createEditor(React, { api, playUrl, saveToWorkspace = false, ver
               e('button', { className: clientTemplates ? 'active' : '', title: t('编辑存档内的客户端控件模板'), onClick: () => void selectAsset('client-control-template') }, t('UI控件-客户端'))),
             e('div', { className: 'qxsim-pane-head' }, e('div', { className: 'qxsim-pane-title' }, clientTemplates ? t('模板与子控件') : t('控件树')), e('span', { className: 'qxsim-muted' }, clientTemplates ? t`${snap.asset.templateCount} 个模板 · ${snap.tree.length} 个控件` : t`${snap.tree.length} 个节点`)),
             e('div', { className: 'qxsim-prefab-panel' },
-              e('div', { className: 'qxsim-prefab-head' }, e('strong', null, t('Prefab 模板')), e('span', { className: 'spacer' }), e('span', null, t`${(snap.prefabs || []).length} 个`),
+              e('div', { className: 'qxsim-prefab-head' }, e('strong', null, t('Prefab 模板')), e('span', null, t`${(snap.prefabs || []).length} 个`), e('span', { className: 'spacer' }), e('button', { className: 'qxsim-prefab-back', title: t('新建一个界面模板并进入编辑'), onClick: () => void createPrefab() }, t('＋ 新建')),
                 clientTemplates ? e('button', { className: 'qxsim-prefab-back', onClick: backToScene, title: t('回到场景树') }, t('← 返回场景')) : null),
               e('div', { className: 'qxsim-prefab-list' }, (snap.prefabs || []).length
                 ? snap.prefabs.map((prefab) => e('div', {

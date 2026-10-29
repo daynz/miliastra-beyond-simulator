@@ -647,6 +647,15 @@ export function createStudio(seed, options = {}) {
     if (op.op === 'addScript' || op.op === 'updateScript' || op.op === 'removeScript') {
       return applyScriptOp(op)
     }
+    if (op.op === 'createPrefab') {
+      // 新建一个「界面」模板并直接进入编辑；名字可随后重命名。
+      const count = (projects.client.root.children || []).length
+      const name = String(op.name || '').trim() || `新建界面${count + 1}`
+      const next = applyPatch(projects.client, { op: 'addTemplate', kind: 'container', name })
+      activeAssetType = CLIENT_ASSET
+      projects.client.selectedId = next.selectedId
+      return get()
+    }
     if (op.op === 'openTemplate') {
       const project = currentProject()
       if (op.expectedRevision !== undefined && Number(op.expectedRevision) !== project.version) {

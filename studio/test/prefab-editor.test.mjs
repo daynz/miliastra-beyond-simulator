@@ -70,3 +70,16 @@ test('禁止嵌套 Prefab：模板内部含 reference 时拒绝放置', () => {
     /嵌套 Prefab/,
   )
 })
+
+
+test('新建 Prefab：createPrefab 切换客户端资产、选中新模板并带 GUID', () => {
+  const studio = createStudio()
+  const before = studio.get()
+  const next = studio.patch({ op: 'createPrefab' })
+  assert.equal(next.asset.type, 'client-control-template')
+  const created = next.tree.find((row) => row.id === next.selectedId)
+  assert.ok(created, '新模板应被选中')
+  assert.match(created.name, /新建界面/)
+  assert.ok(Number(created.guid) > 0, '模板根必须有 GUID 才能作为 prefabId')
+  assert.equal(next.prefabs.length, before.prefabs.length + 1)
+})
